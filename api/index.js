@@ -1,5 +1,83 @@
 import { getYT } from './_lib/yt.js';
 
+// Public failover mirrors for emergency backup
+const FALLBACK_APIS = [
+  'https://inv.nadeko.net',
+  'https://invidious.nerdvpn.de',
+  'https://vid.puffyan.us',
+  'https://invidious.jing.rocks',
+  'https://pipedapi.kavin.rocks'
+];
+
+async function fetchFromFallback(id) {
+  for (const host of FALLBACK_APIS) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
+
+      const isPiped = host.includes('piped');
+      const url = isPiped ? `${host}/streams/${id}` : `${host}/api/v1/videos/${id}`;
+
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) continue;
+      const data = await res.json();
+
+      // Handle Piped instances
+      if (isPiped && data.title) {
+        const audioStreams = data.audioStreams || [];
+        const videoStreams = data.videoStreams || [];
+        const bestAudio = audioStreams[audioStreams.length - 1] || audioStreams[0];
+        const progVideo = videoStreams.find(v => v.videoOnly === false) || videoStreams[0];
+
+        return {
+          id,
+          title: data.title || 'Untitled',
+          channel: data.uploader || 'Unknown',
+          audioUrl: bestAudio?.url || '',
+          videoUrl: progVideo?.url || '',
+          downloadOptions: {
+            audio: audioStreams.slice(0, 3).map(a => ({ quality: a.quality || 'Audio', url: a.url })),
+            video: videoStreams.slice(0, 3).map(v => ({ quality: v.quality || 'Video', url: v.url }))
+          }
+        };
+      }
+
+      // Handle Invidious instances
+      if (data && data.title) {
+        const progVideo = (data.formatStreams || []).find(f => f.url && f.container === 'mp4') || data.formatStreams?.[0];
+        const audioStreams = (data.adaptiveFormats || []).filter(f => f.type?.startsWith('audio') && f.url);
+        const bestAudio = audioStreams[audioStreams.length - 1] || audioStreams[0];
+
+        return {
+          id,
+          title: data.title || 'Untitled',
+          channel: data.author || 'Unknown',
+          audioUrl: bestAudio?.url || progVideo?.url || '',
+          videoUrl: progVideo?.url || '',
+          downloadOptions: {
+            audio: audioStreams.slice(0, 3).map(a => ({
+              quality: `${Math.round((a.bitrate || 128000) / 1000)} kbps`,
+              url: a.url
+            })),
+            video: (data.formatStreams || []).slice(0, 3).map(v => ({
+              quality: v.resolution || v.qualityLabel || '720p',
+              url: v.url
+            }))
+          }
+        };
+      }
+    } catch (e) {
+      // Continue to next mirror if this one fails
+    }
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -16,80 +94,62 @@ export default async function handler(req, res) {
   try {
     const youtube = await getYT();
 
-    // Mode 1: Fetch Audio / Video Streams by Video ID
+    // Mode 1: Fetch Video Streams
     if (id) {
       let info = null;
-      let lastErr = null;
+      let playabilityError = null;
 
-      // Rotate through mobile/embedded clients that bypass datacenter 400 blocks
-      const clients = ['IOS', 'ANDROID', 'TV_EMBEDDED', 'WEB'];
+      // Prioritize WEB (uses your session cookie), then mobile clients
+      const clients = ['WEB', 'ANDROID', 'IOS', 'TV_EMBEDDED'];
 
       for (const client of clients) {
         try {
-          info = await youtube.getBasicInfo(id, client);
-          if (info && info.basic_info?.title) {
+          const resInfo = await youtube.getBasicInfo(id, client);
+          const status = resInfo?.playability_status?.status;
+
+          if (status === 'OK' && resInfo.basic_info?.title) {
+            info = resInfo;
             break;
+          } else if (resInfo?.playability_status?.reason) {
+            playabilityError = resInfo.playability_status.reason;
           }
         } catch (err) {
-          lastErr = err;
-          console.warn(`Client ${client} failed for ID ${id}:`, err.message);
+          console.warn(`Client ${client} error for ${id}:`, err.message);
         }
       }
 
+      // If YouTube direct extraction fails, fall back to mirrors
       if (!info || !info.basic_info?.title) {
-        return res.status(502).json({
-          error: lastErr?.message || 'Could not retrieve video streams from YouTube.'
-        });
-      }
+        console.log(`YouTube direct extraction failed (${playabilityError || 'unknown'}), attempting fallback...`);
+        const fallback = await fetchFromFallback(id);
+        if (fallback && (fallback.audioUrl || fallback.videoUrl)) {
+          return res.status(200).json(fallback);
+        }
 
-      // Check playability
-      if (info.playability_status?.status && info.playability_status.status !== 'OK') {
         return res.status(422).json({
-          error: `Video unplayable: ${info.playability_status.status} — ${info.playability_status.reason || ''}`
+          error: playabilityError || 'This video is unavailable or blocked in this region.'
         });
       }
 
-      // 1. Resolve Best Audio Stream
+      // Extract Best Audio Stream
       let audioUrl = '';
       try {
         const audioFmt = info.chooseFormat({ type: 'audio', quality: 'best' });
-        if (audioFmt) {
-          try {
-            audioUrl = audioFmt.decipher(youtube.session.player) || audioFmt.url || '';
-          } catch {
-            audioUrl = audioFmt.url || '';
-          }
-        }
+        audioUrl = audioFmt?.decipher(youtube.session.player) || audioFmt?.url || '';
       } catch (e) {
-        console.warn('Audio format selection warning:', e.message);
+        console.warn('Audio decipher warning:', e.message);
       }
 
-      // 2. Resolve Best Video Stream (Progressive muxed audio+video, or video)
+      // Extract Best Video Stream
       let videoUrl = '';
       try {
-        let videoFmt = null;
-        try {
-          videoFmt = info.chooseFormat({ type: 'video+audio', quality: 'best' });
-        } catch {}
-
-        if (!videoFmt) {
-          try {
-            videoFmt = info.chooseFormat({ type: 'video', quality: 'best' });
-          } catch {}
-        }
-
-        if (videoFmt) {
-          try {
-            videoUrl = videoFmt.decipher(youtube.session.player) || videoFmt.url || '';
-          } catch {
-            videoUrl = videoFmt.url || '';
-          }
-        }
+        const videoFmt = info.chooseFormat({ type: 'video+audio', quality: 'best' }) || info.chooseFormat({ type: 'video', quality: 'best' });
+        videoUrl = videoFmt?.decipher(youtube.session.player) || videoFmt?.url || '';
       } catch (e) {
-        console.warn('Video format selection warning:', e.message);
+        console.warn('Video decipher warning:', e.message);
       }
 
-      // 3. Resolve Download Formats
+      // Extract Download Options
       const allFormats = info.streaming_data?.adaptive_formats || info.formats || [];
       const progFormats = info.streaming_data?.formats || [];
 
@@ -122,8 +182,8 @@ export default async function handler(req, res) {
         id,
         title: info.basic_info.title,
         channel: info.basic_info.author || 'Unknown',
-        audioUrl,
-        videoUrl,
+        audioUrl: audioUrl || videoUrl,
+        videoUrl: videoUrl || audioUrl,
         downloadOptions: {
           audio: audioDownloads,
           video: videoDownloads
