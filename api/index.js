@@ -16,7 +16,6 @@ export default async function handler(req, res) {
     if (id) {
       const info = await youtube.getInfo(id);
 
-      // CRITICAL: check playability before trusting the response
       const status = info.playability_status?.status;
       if (status && status !== 'OK') {
         return res.status(422).json({
@@ -50,7 +49,7 @@ export default async function handler(req, res) {
         .filter(f => f.has_audio && !f.has_video)
         .map(f => {
           let u = '';
-          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch {}
+          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch { }
           return { quality: `${Math.round((f.average_bitrate || 128000) / 1000)} kbps`, url: u };
         })
         .filter(f => f.url)
@@ -60,16 +59,14 @@ export default async function handler(req, res) {
         .filter(f => f.has_video && f.has_audio)
         .map(f => {
           let u = '';
-          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch {}
+          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch { }
           return { quality: f.quality_label || '720p', url: u };
         })
         .filter(f => f.url)
         .slice(0, 3);
 
       if (!audioUrl && !videoUrl) {
-        return res.status(502).json({
-          error: 'Could not resolve any playable stream for this video.'
-        });
+        return res.status(502).json({ error: 'Could not resolve any playable stream for this video.' });
       }
 
       return res.status(200).json({
