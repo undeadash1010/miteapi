@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "youtubei.js": "^12.2.0"
+    "bgutils-js": "^3.2.0",
+    "jsdom": "^30.0.1",
+    "youtubei.js": "^18.0.0"
   },
   "devDependencies": {
     "vercel": "^59.11.7"

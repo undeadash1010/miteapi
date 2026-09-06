@@ -1,24 +1,11 @@
-import { Innertube } from 'youtubei.js';
-
-let yt = null;
-async function getYT() {
-  if (!yt) {
-    yt = await Innertube.create({ lang: 'en', location: 'US', retrieve_player: true });
-  }
-  return yt;
-}
+import { getYT } from './_lib/yt.js';
 
 export default async function handler(req, res) {
-  // Set CORS headers immediately so the browser never blocks it
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // Safe parameter parsing for both Vercel edge and serverless environments
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const q = url.searchParams.get('q') || req.query?.q;
   const id = url.searchParams.get('id') || req.query?.id;
@@ -26,57 +13,75 @@ export default async function handler(req, res) {
   try {
     const youtube = await getYT();
 
-    // Mode 1: Get Video Stream Details (Play/Download)
     if (id) {
       const info = await youtube.getInfo(id);
 
-      // Extract high quality audio stream
+      // CRITICAL: check playability before trusting the response
+      const status = info.playability_status?.status;
+      if (status && status !== 'OK') {
+        return res.status(422).json({
+          error: `Video unplayable: ${status} — ${info.playability_status?.reason || 'unknown reason'}`
+        });
+      }
+
+      if (!info.basic_info?.title) {
+        return res.status(502).json({
+          error: 'YouTube returned an empty/stripped response (likely bot detection). Try again.'
+        });
+      }
+
       let audioUrl = '';
       try {
         const audioFormat = info.chooseFormat({ type: 'audio', quality: 'best' });
         audioUrl = audioFormat?.decipher(youtube.session.player) || audioFormat?.url || '';
       } catch (e) {
-        console.warn('Audio format warning:', e);
+        console.warn('Audio format warning:', e.message);
       }
 
-      // Extract progressive video stream (video + audio muxed)
       let videoUrl = '';
       try {
         const videoFormat = info.chooseFormat({ type: 'video+audio', quality: 'best' });
         videoUrl = videoFormat?.decipher(youtube.session.player) || videoFormat?.url || '';
       } catch (e) {
-        console.warn('Video format warning:', e);
+        console.warn('Video format warning:', e.message);
       }
 
-      // Format download variants
       const audioDownloads = (info.formats || [])
         .filter(f => f.has_audio && !f.has_video)
-        .map(f => ({
-          quality: `${Math.round((f.average_bitrate || 128000) / 1000)} kbps`,
-          url: f.decipher(youtube.session.player) || f.url || ''
-        })).filter(f => f.url).slice(0, 3);
+        .map(f => {
+          let u = '';
+          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch {}
+          return { quality: `${Math.round((f.average_bitrate || 128000) / 1000)} kbps`, url: u };
+        })
+        .filter(f => f.url)
+        .slice(0, 3);
 
       const videoDownloads = (info.formats || [])
         .filter(f => f.has_video && f.has_audio)
-        .map(f => ({
-          quality: f.quality_label || '720p',
-          url: f.decipher(youtube.session.player) || f.url || ''
-        })).filter(f => f.url).slice(0, 3);
+        .map(f => {
+          let u = '';
+          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch {}
+          return { quality: f.quality_label || '720p', url: u };
+        })
+        .filter(f => f.url)
+        .slice(0, 3);
+
+      if (!audioUrl && !videoUrl) {
+        return res.status(502).json({
+          error: 'Could not resolve any playable stream for this video.'
+        });
+      }
 
       return res.status(200).json({
         id,
-        title: info.basic_info?.title || 'Untitled',
-        channel: info.basic_info?.author || 'Unknown',
+        title: info.basic_info.title,
+        channel: info.basic_info.author || 'Unknown',
         audioUrl,
         videoUrl,
-        downloadOptions: {
-          audio: audioDownloads,
-          video: videoDownloads
-        }
+        downloadOptions: { audio: audioDownloads, video: videoDownloads }
       });
     }
 
-    // Mode 2: Search YouTube
     if (q) {
       const search = await youtube.search(q, { type: 'video' });
       const videos = (search.videos || [])
@@ -90,11 +95,9 @@ export default async function handler(req, res) {
           views: v.views?.text || '0 views',
           thumbnail: v.thumbnails?.[0]?.url || ''
         }));
-
       return res.status(200).json({ results: videos });
     }
 
-    // Default Fallback
     return res.status(200).json({
       status: 'Mite API is active and online!',
       usage: 'Use ?q=query to search, or ?id=videoId to play.'
