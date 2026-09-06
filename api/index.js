@@ -1,221 +1,136 @@
-import { getYT } from './_lib/yt.js';
-
-// Public failover mirrors for emergency backup
-const FALLBACK_APIS = [
-  'https://inv.nadeko.net',
-  'https://invidious.nerdvpn.de',
-  'https://vid.puffyan.us',
-  'https://invidious.jing.rocks',
-  'https://pipedapi.kavin.rocks'
-];
-
-async function fetchFromFallback(id) {
-  for (const host of FALLBACK_APIS) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
-
-      const isPiped = host.includes('piped');
-      const url = isPiped ? `${host}/streams/${id}` : `${host}/api/v1/videos/${id}`;
-
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-      });
-      clearTimeout(timeout);
-
-      if (!res.ok) continue;
-      const data = await res.json();
-
-      // Handle Piped instances
-      if (isPiped && data.title) {
-        const audioStreams = data.audioStreams || [];
-        const videoStreams = data.videoStreams || [];
-        const bestAudio = audioStreams[audioStreams.length - 1] || audioStreams[0];
-        const progVideo = videoStreams.find(v => v.videoOnly === false) || videoStreams[0];
-
-        return {
-          id,
-          title: data.title || 'Untitled',
-          channel: data.uploader || 'Unknown',
-          audioUrl: bestAudio?.url || '',
-          videoUrl: progVideo?.url || '',
-          downloadOptions: {
-            audio: audioStreams.slice(0, 3).map(a => ({ quality: a.quality || 'Audio', url: a.url })),
-            video: videoStreams.slice(0, 3).map(v => ({ quality: v.quality || 'Video', url: v.url }))
-          }
-        };
-      }
-
-      // Handle Invidious instances
-      if (data && data.title) {
-        const progVideo = (data.formatStreams || []).find(f => f.url && f.container === 'mp4') || data.formatStreams?.[0];
-        const audioStreams = (data.adaptiveFormats || []).filter(f => f.type?.startsWith('audio') && f.url);
-        const bestAudio = audioStreams[audioStreams.length - 1] || audioStreams[0];
-
-        return {
-          id,
-          title: data.title || 'Untitled',
-          channel: data.author || 'Unknown',
-          audioUrl: bestAudio?.url || progVideo?.url || '',
-          videoUrl: progVideo?.url || '',
-          downloadOptions: {
-            audio: audioStreams.slice(0, 3).map(a => ({
-              quality: `${Math.round((a.bitrate || 128000) / 1000)} kbps`,
-              url: a.url
-            })),
-            video: (data.formatStreams || []).slice(0, 3).map(v => ({
-              quality: v.resolution || v.qualityLabel || '720p',
-              url: v.url
-            }))
-          }
-        };
-      }
-    } catch (e) {
-      // Continue to next mirror if this one fails
-    }
-  }
-  return null;
-}
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const q = url.searchParams.get('q') || req.query?.q;
   const id = url.searchParams.get('id') || req.query?.id;
 
   try {
-    const youtube = await getYT();
-
-    // Mode 1: Fetch Video Streams
+    /* ─── MODE 1: Get Video Streams ─── */
     if (id) {
-      let info = null;
-      let playabilityError = null;
+      const metaRes = await fetch(
+        `https://www.dailymotion.com/player/metadata/video/${id}`,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            Accept: 'application/json',
+          },
+        }
+      );
 
-      // Prioritize WEB (uses your session cookie), then mobile clients
-      const clients = ['WEB', 'ANDROID', 'IOS', 'TV_EMBEDDED'];
+      if (!metaRes.ok) {
+        return res.status(404).json({ error: 'Video not found.' });
+      }
 
-      for (const client of clients) {
-        try {
-          const resInfo = await youtube.getBasicInfo(id, client);
-          const status = resInfo?.playability_status?.status;
+      const meta = await metaRes.json();
 
-          if (status === 'OK' && resInfo.basic_info?.title) {
-            info = resInfo;
-            break;
-          } else if (resInfo?.playability_status?.reason) {
-            playabilityError = resInfo.playability_status.reason;
+      if (meta.error) {
+        return res
+          .status(400)
+          .json({ error: meta.error.message || 'Unavailable.' });
+      }
+
+      const qualities = meta.qualities || {};
+      let hlsUrl = '';
+      let mp4Url = '';
+      const videoDownloads = [];
+
+      for (const [key, sources] of Object.entries(qualities)) {
+        if (!Array.isArray(sources)) continue;
+        for (const src of sources) {
+          if (!src.url) continue;
+          if (key === 'auto' && !hlsUrl) {
+            hlsUrl = src.url;
+          } else if (key !== 'auto') {
+            if (!mp4Url && src.type?.includes('mp4')) mp4Url = src.url;
+            videoDownloads.push({
+              quality: `${key}p`,
+              url: src.url,
+            });
           }
-        } catch (err) {
-          console.warn(`Client ${client} error for ${id}:`, err.message);
         }
       }
 
-      // If YouTube direct extraction fails, fall back to mirrors
-      if (!info || !info.basic_info?.title) {
-        console.log(`YouTube direct extraction failed (${playabilityError || 'unknown'}), attempting fallback...`);
-        const fallback = await fetchFromFallback(id);
-        if (fallback && (fallback.audioUrl || fallback.videoUrl)) {
-          return res.status(200).json(fallback);
-        }
-
-        return res.status(422).json({
-          error: playabilityError || 'This video is unavailable or blocked in this region.'
-        });
-      }
-
-      // Extract Best Audio Stream
-      let audioUrl = '';
-      try {
-        const audioFmt = info.chooseFormat({ type: 'audio', quality: 'best' });
-        audioUrl = audioFmt?.decipher(youtube.session.player) || audioFmt?.url || '';
-      } catch (e) {
-        console.warn('Audio decipher warning:', e.message);
-      }
-
-      // Extract Best Video Stream
-      let videoUrl = '';
-      try {
-        const videoFmt = info.chooseFormat({ type: 'video+audio', quality: 'best' }) || info.chooseFormat({ type: 'video', quality: 'best' });
-        videoUrl = videoFmt?.decipher(youtube.session.player) || videoFmt?.url || '';
-      } catch (e) {
-        console.warn('Video decipher warning:', e.message);
-      }
-
-      // Extract Download Options
-      const allFormats = info.streaming_data?.adaptive_formats || info.formats || [];
-      const progFormats = info.streaming_data?.formats || [];
-
-      const audioDownloads = allFormats
-        .filter(f => f.has_audio && !f.has_video)
-        .map(f => {
-          let u = '';
-          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch { u = f.url || ''; }
-          return {
-            quality: `${Math.round((f.average_bitrate || f.bitrate || 128000) / 1000)} kbps`,
-            url: u
-          };
-        })
-        .filter(f => f.url)
-        .slice(0, 3);
-
-      const videoDownloads = progFormats
-        .map(f => {
-          let u = '';
-          try { u = f.decipher(youtube.session.player) || f.url || ''; } catch { u = f.url || ''; }
-          return {
-            quality: f.quality_label || `${f.height || 720}p`,
-            url: u
-          };
-        })
-        .filter(f => f.url)
-        .slice(0, 3);
+      const streamUrl = mp4Url || hlsUrl || '';
 
       return res.status(200).json({
         id,
-        title: info.basic_info.title,
-        channel: info.basic_info.author || 'Unknown',
-        audioUrl: audioUrl || videoUrl,
-        videoUrl: videoUrl || audioUrl,
+        title: meta.title || 'Untitled',
+        channel: meta.owner?.screenname || meta.owner?.username || 'Creator',
+        audioUrl: hlsUrl || mp4Url || '',
+        videoUrl: streamUrl,
+        thumbnail:
+          meta.posters?.['720'] ||
+          meta.posters?.['480'] ||
+          meta.posters?.['240'] ||
+          Object.values(meta.posters || {}).find(Boolean) ||
+          '',
         downloadOptions: {
-          audio: audioDownloads,
-          video: videoDownloads
-        }
+          audio: hlsUrl ? [{ quality: 'HLS Audio', url: hlsUrl }] : [],
+          video: videoDownloads.slice(0, 4),
+        },
       });
     }
 
-    // Mode 2: Search YouTube
+    /* ─── MODE 2: Search ─── */
     if (q) {
-      const search = await youtube.search(q, { type: 'video' });
-      const videos = (search.results || search.videos || [])
-        .filter(v => v.type === 'Video' || v.id)
-        .map(v => ({
+      const searchRes = await fetch(
+        `https://api.dailymotion.com/videos?search=${encodeURIComponent(q)}&fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url&limit=24&sort=relevance`,
+        {
+          headers: {
+            'User-Agent': 'Mite/2.0',
+          },
+        }
+      );
+
+      if (!searchRes.ok) {
+        return res.status(502).json({ error: 'Search failed.' });
+      }
+
+      const data = await searchRes.json();
+      const list = data.list || [];
+
+      const videos = list.map((v) => {
+        const sec = v.duration || 0;
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+
+        let views = `${v.views_total || 0} views`;
+        if (v.views_total >= 1_000_000)
+          views = `${(v.views_total / 1_000_000).toFixed(1)}M views`;
+        else if (v.views_total >= 1_000)
+          views = `${(v.views_total / 1_000).toFixed(1)}K views`;
+
+        return {
           id: v.id,
-          title: v.title?.text || v.title || 'Untitled',
-          channel: v.author?.name || v.author || 'Unknown',
-          duration: v.duration?.text || (v.duration ? `${Math.floor(v.duration / 60)}:${v.duration % 60}` : '0:00'),
-          durationSec: v.duration?.seconds || v.duration || 0,
-          views: v.views?.text || v.short_view_count?.text || '',
-          thumbnail: v.thumbnails?.[0]?.url || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`
-        }));
+          title: v.title || 'Untitled',
+          channel: v['owner.screenname'] || 'Creator',
+          duration: `${m}:${s < 10 ? '0' : ''}${s}`,
+          durationSec: sec,
+          views,
+          thumbnail:
+            v.thumbnail_720_url ||
+            v.thumbnail_480_url ||
+            `https://www.dailymotion.com/thumbnail/video/${v.id}`,
+        };
+      });
 
       return res.status(200).json({ results: videos });
     }
 
+    /* ─── DEFAULT ─── */
     return res.status(200).json({
-      status: 'Mite API is active and online!',
-      usage: 'Use ?q=query to search, or ?id=videoId to play.'
+      status: 'Mite API v2 — Dailymotion',
+      usage: '?q=search_term  |  ?id=video_id',
     });
-
   } catch (err) {
     console.error('API Error:', err);
-    return res.status(500).json({ error: err.message || 'Internal server error' });
+    return res.status(500).json({ error: err.message || 'Internal error' });
   }
 }
