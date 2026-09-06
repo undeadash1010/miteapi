@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "youtubei.js": "^15.0.0"
+    "youtubei.js": "^12.2.0"
   },
   "devDependencies": {
     "vercel": "^59.11.7"
