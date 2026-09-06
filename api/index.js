@@ -1,35 +1,24 @@
-{
-  "name": "mite-api",
-  "version": "2.0.0",
-  "type": "module",
-  "devDependencies": {
-    "vercel": "^59.11.7"
-  }
-}export default async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const q = url.searchParams.get('q') || req.query?.q;
   const id = url.searchParams.get('id') || req.query?.id;
 
   try {
-    /* ─── MODE 1: Get Video Streams ─── */
+    // 1. Fetch Video Streams
     if (id) {
-      const metaRes = await fetch(
-        `https://www.dailymotion.com/player/metadata/video/${id}`,
-        {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-            Accept: 'application/json',
-          },
+      const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${id}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
         }
-      );
+      });
 
       if (!metaRes.ok) {
         return res.status(404).json({ error: 'Video not found.' });
@@ -38,106 +27,95 @@
       const meta = await metaRes.json();
 
       if (meta.error) {
-        return res
-          .status(400)
-          .json({ error: meta.error.message || 'Unavailable.' });
+        return res.status(400).json({ error: meta.error.message || 'Unavailable.' });
       }
 
       const qualities = meta.qualities || {};
-      let hlsUrl = '';
-      let mp4Url = '';
+      let streamUrl = '';
       const videoDownloads = [];
 
-      for (const [key, sources] of Object.entries(qualities)) {
+      for (const key of Object.keys(qualities)) {
+        const sources = qualities[key];
         if (!Array.isArray(sources)) continue;
         for (const src of sources) {
-          if (!src.url) continue;
-          if (key === 'auto' && !hlsUrl) {
-            hlsUrl = src.url;
-          } else if (key !== 'auto') {
-            if (!mp4Url && src.type?.includes('mp4')) mp4Url = src.url;
-            videoDownloads.push({
-              quality: `${key}p`,
-              url: src.url,
-            });
+          if (src.url) {
+            if (!streamUrl) streamUrl = src.url;
+            if (key !== 'auto') {
+              videoDownloads.push({
+                quality: `${key}p`,
+                url: src.url
+              });
+            }
           }
         }
       }
 
-      const streamUrl = mp4Url || hlsUrl || '';
+      if (!streamUrl && qualities.auto && qualities.auto[0]?.url) {
+        streamUrl = qualities.auto[0].url;
+      }
 
       return res.status(200).json({
-        id,
+        id: id,
         title: meta.title || 'Untitled',
-        channel: meta.owner?.screenname || meta.owner?.username || 'Creator',
-        audioUrl: hlsUrl || mp4Url || '',
+        channel: meta.owner?.screenname || 'Creator',
+        audioUrl: streamUrl,
         videoUrl: streamUrl,
-        thumbnail:
-          meta.posters?.['720'] ||
-          meta.posters?.['480'] ||
-          meta.posters?.['240'] ||
-          Object.values(meta.posters || {}).find(Boolean) ||
-          '',
+        thumbnail: meta.posters?.['720'] || meta.posters?.['480'] || meta.posters?.['240'] || '',
         downloadOptions: {
-          audio: hlsUrl ? [{ quality: 'HLS Audio', url: hlsUrl }] : [],
-          video: videoDownloads.slice(0, 4),
-        },
+          audio: streamUrl ? [{ quality: 'Audio Stream', url: streamUrl }] : [],
+          video: videoDownloads.length ? videoDownloads : (streamUrl ? [{ quality: 'Auto', url: streamUrl }] : [])
+        }
       });
     }
 
-    /* ─── MODE 2: Search ─── */
+    // 2. Search Videos
     if (q) {
       const searchRes = await fetch(
-        `https://api.dailymotion.com/videos?search=${encodeURIComponent(q)}&fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url&limit=24&sort=relevance`,
-        {
-          headers: {
-            'User-Agent': 'Mite/2.0',
-          },
-        }
+        `https://api.dailymotion.com/videos?search=${encodeURIComponent(q)}&fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url&limit=24`
       );
 
       if (!searchRes.ok) {
-        return res.status(502).json({ error: 'Search failed.' });
+        return res.status(502).json({ error: 'Search request failed.' });
       }
 
       const data = await searchRes.json();
       const list = data.list || [];
 
-      const videos = list.map((v) => {
+      const videos = list.map(v => {
         const sec = v.duration || 0;
         const m = Math.floor(sec / 60);
         const s = sec % 60;
+        const durationFormatted = `${m}:${s < 10 ? '0' : ''}${s}`;
 
         let views = `${v.views_total || 0} views`;
-        if (v.views_total >= 1_000_000)
-          views = `${(v.views_total / 1_000_000).toFixed(1)}M views`;
-        else if (v.views_total >= 1_000)
-          views = `${(v.views_total / 1_000).toFixed(1)}K views`;
+        if (v.views_total >= 1000000) {
+          views = `${(v.views_total / 1000000).toFixed(1)}M views`;
+        } else if (v.views_total >= 1000) {
+          views = `${(v.views_total / 1000).toFixed(1)}K views`;
+        }
 
         return {
           id: v.id,
           title: v.title || 'Untitled',
           channel: v['owner.screenname'] || 'Creator',
-          duration: `${m}:${s < 10 ? '0' : ''}${s}`,
+          duration: durationFormatted,
           durationSec: sec,
-          views,
-          thumbnail:
-            v.thumbnail_720_url ||
-            v.thumbnail_480_url ||
-            `https://www.dailymotion.com/thumbnail/video/${v.id}`,
+          views: views,
+          thumbnail: v.thumbnail_720_url || v.thumbnail_480_url || `https://www.dailymotion.com/thumbnail/video/${v.id}`
         };
       });
 
       return res.status(200).json({ results: videos });
     }
 
-    /* ─── DEFAULT ─── */
+    // Default status route
     return res.status(200).json({
-      status: 'Mite API v2 — Dailymotion',
-      usage: '?q=search_term  |  ?id=video_id',
+      status: 'Mite API is online',
+      usage: '?q=query OR ?id=videoId'
     });
+
   } catch (err) {
     console.error('API Error:', err);
-    return res.status(500).json({ error: err.message || 'Internal error' });
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
   }
 }
