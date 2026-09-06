@@ -2,80 +2,48 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const q = url.searchParams.get('q') || req.query?.q;
   const id = url.searchParams.get('id') || req.query?.id;
 
   try {
-    // 1. Fetch Video Streams
+    // 1. Single Video Details
     if (id) {
-      const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${id}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
-      });
+      const vRes = await fetch(
+        `https://api.dailymotion.com/video/${id}?fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url`
+      );
 
-      if (!metaRes.ok) {
+      if (!vRes.ok) {
         return res.status(404).json({ error: 'Video not found.' });
       }
 
-      const meta = await metaRes.json();
-
-      if (meta.error) {
-        return res.status(400).json({ error: meta.error.message || 'Unavailable.' });
-      }
-
-      const qualities = meta.qualities || {};
-      let streamUrl = '';
-      const videoDownloads = [];
-
-      for (const key of Object.keys(qualities)) {
-        const sources = qualities[key];
-        if (!Array.isArray(sources)) continue;
-        for (const src of sources) {
-          if (src.url) {
-            if (!streamUrl) streamUrl = src.url;
-            if (key !== 'auto') {
-              videoDownloads.push({
-                quality: `${key}p`,
-                url: src.url
-              });
-            }
-          }
-        }
-      }
-
-      if (!streamUrl && qualities.auto && qualities.auto[0]?.url) {
-        streamUrl = qualities.auto[0].url;
-      }
+      const v = await vRes.json();
+      const sec = v.duration || 0;
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
 
       return res.status(200).json({
-        id: id,
-        title: meta.title || 'Untitled',
-        channel: meta.owner?.screenname || 'Creator',
-        audioUrl: streamUrl,
-        videoUrl: streamUrl,
-        thumbnail: meta.posters?.['720'] || meta.posters?.['480'] || meta.posters?.['240'] || '',
-        downloadOptions: {
-          audio: streamUrl ? [{ quality: 'Audio Stream', url: streamUrl }] : [],
-          video: videoDownloads.length ? videoDownloads : (streamUrl ? [{ quality: 'Auto', url: streamUrl }] : [])
-        }
+        id: v.id,
+        title: v.title || 'Untitled',
+        channel: v['owner.screenname'] || 'Creator',
+        duration: `${m}:${s < 10 ? '0' : ''}${s}`,
+        durationSec: sec,
+        thumbnail: v.thumbnail_720_url || v.thumbnail_480_url || `https://www.dailymotion.com/thumbnail/video/${v.id}`
       });
     }
 
     // 2. Search Videos
     if (q) {
       const searchRes = await fetch(
-        `https://api.dailymotion.com/videos?search=${encodeURIComponent(q)}&fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url&limit=24`
+        `https://api.dailymotion.com/videos?search=${encodeURIComponent(q)}&fields=id,title,owner.screenname,duration,views_total,thumbnail_720_url,thumbnail_480_url&limit=24&sort=relevance`
       );
 
       if (!searchRes.ok) {
-        return res.status(502).json({ error: 'Search request failed.' });
+        return res.status(502).json({ error: 'Search failed.' });
       }
 
       const data = await searchRes.json();
@@ -85,7 +53,6 @@ export default async function handler(req, res) {
         const sec = v.duration || 0;
         const m = Math.floor(sec / 60);
         const s = sec % 60;
-        const durationFormatted = `${m}:${s < 10 ? '0' : ''}${s}`;
 
         let views = `${v.views_total || 0} views`;
         if (v.views_total >= 1000000) {
@@ -98,9 +65,9 @@ export default async function handler(req, res) {
           id: v.id,
           title: v.title || 'Untitled',
           channel: v['owner.screenname'] || 'Creator',
-          duration: durationFormatted,
+          duration: `${m}:${s < 10 ? '0' : ''}${s}`,
           durationSec: sec,
-          views: views,
+          views,
           thumbnail: v.thumbnail_720_url || v.thumbnail_480_url || `https://www.dailymotion.com/thumbnail/video/${v.id}`
         };
       });
@@ -108,14 +75,8 @@ export default async function handler(req, res) {
       return res.status(200).json({ results: videos });
     }
 
-    // Default status route
-    return res.status(200).json({
-      status: 'Mite API is online',
-      usage: '?q=query OR ?id=videoId'
-    });
-
+    return res.status(200).json({ status: 'Mite API is online' });
   } catch (err) {
-    console.error('API Error:', err);
-    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+    return res.status(500).json({ error: err.message || 'Internal error' });
   }
 }
