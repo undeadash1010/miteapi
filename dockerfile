@@ -1,15 +1,13 @@
-FROM node:20-bookworm
+FROM node:20-slim
 
-# Install yt-dlp and ffmpeg
-RUN apt-get update && apt-get install -y yt-dlp ffmpeg
+# Install python3 and yt-dlp
+RUN apt-get update && apt-get install -y python3 python3-pip curl ffmpeg
+RUN pip3 install --break-system-packages yt-dlp
 
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm install
-
 COPY . .
 
 EXPOSE 3000
-
-CMD ["npm", "start"]
+CMD ["node", "api/index.js"]
