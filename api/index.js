@@ -1,4 +1,11 @@
-export default async function handler(req, res) {
+{
+  "name": "mite-api",
+  "version": "2.0.0",
+  "type": "module",
+  "devDependencies": {
+    "vercel": "^59.11.7"
+  }
+}export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
