@@ -4,13 +4,13 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS for all routes
 app.use(cors());
+app.use(express.json());
 
-// Proxy all requests to yattee-server
-app.use('/api', async (req, res) => {
+// Proxy all API requests
+app.use('/api/v1', async (req, res) => {
   try {
-    const targetUrl = `https://yattee-server-production-1d73.up.railway.app${req.url}`;
+    const targetUrl = `https://yattee-server-production-1d73.up.railway.app/api/v1${req.url}`;
     
     const response = await fetch(targetUrl, {
       method: req.method,
@@ -20,12 +20,20 @@ app.use('/api', async (req, res) => {
       }
     });
     
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
     const data = await response.json();
-    res.status(response.status).json(data);
+    res.json(data);
   } catch (error) {
     console.error('Proxy error:', error);
-    res.status(500).json({ error: 'Proxy request failed' });
+    res.status(500).json({ error: 'Proxy request failed', details: error.message });
   }
+});
+
+app.get('/', (req, res) => {
+  res.json({ status: 'Mite CORS Proxy is running' });
 });
 
 app.listen(PORT, () => {
