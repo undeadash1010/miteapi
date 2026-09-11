@@ -1,13 +1,12 @@
 {
-  "name": "mite-api",
-  "version": "3.0.0",
-  "type": "module",
-  "main": "api/index.js",
+  "name": "mite-frontend",
+  "version": "1.0.0",
+  "description": "Mite - Quiet Media Utility",
   "scripts": {
-    "start": "node api/index.js"
+    "build": "echo 'Static build complete'",
+    "start": "python3 -m http.server $PORT",
+    "dev": "python3 -m http.server 8000"
   },
-  "dependencies": {
-    "express": "^4.19.2",
-    "cors": "^2.8.5"
-  }
+  "keywords": ["media", "player", "static"],
+  "author": "Ashar"
 }
