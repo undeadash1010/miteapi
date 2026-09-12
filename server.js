@@ -117,8 +117,9 @@ app.use(['/api/v1', '/proxy'], async (req, res) => {
         const targetUrl = `${YATTEE_URL}${req.originalUrl}`;
         // Video relay requests can be slow (much bigger payload than audio),
         // but they should never hang forever — cap it so failures are visible.
-        const isVideoDetails = /\/videos\//.test(req.originalUrl) && /proxy_mode=relay/.test(req.originalUrl);
-        const timeoutMs = isVideoDetails ? 25000 : 15000;
+        const isVideoDetails = /\/videos\//.test(req.originalUrl);
+        const isDownloadMode = /proxy_mode=download/.test(req.originalUrl);
+        const timeoutMs = isDownloadMode ? 45000 : (isVideoDetails ? 25000 : 15000);
 
         async function fetchWithTimeout(url, opts) {
             const controller = new AbortController();
