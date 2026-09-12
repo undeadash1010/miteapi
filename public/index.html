@@ -7,6 +7,7 @@
     <title>Mite — Quiet Media Utility</title>
     <meta name="description" content="Quiet, telemetry-free media utility for distraction-free listening and viewing.">
     <meta name="theme-color" content="#131316">
+    <link rel="icon" href="./favicon.ico" sizes="any">
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -533,10 +534,24 @@
             const hit = detailsCache.get(key);
             if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
 
-            const res = await fetch(`${API_BASE}/api/v1/videos/${id}?proxy=true&proxy_mode=${proxyMode}`);
+            // Guard against a silent infinite hang — surface a real error instead.
+            const controller = new AbortController();
+            const timeoutMs = 28000;
+            const t = setTimeout(() => controller.abort(), timeoutMs);
+
+            let res;
+            try {
+                res = await fetch(`${API_BASE}/api/v1/videos/${id}?proxy=true&proxy_mode=${proxyMode}`, { signal: controller.signal });
+            } catch (e) {
+                if (e.name === 'AbortError') throw new Error(`Timed out after ${timeoutMs / 1000}s resolving stream`);
+                throw e;
+            } finally {
+                clearTimeout(t);
+            }
+
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || err.error || 'Video unavailable');
+                throw new Error(err.detail || err.error || `Video unavailable (${res.status})`);
             }
             const data = await res.json();
 
@@ -795,7 +810,7 @@
             el.addEventListener('canplay', () => { if (current && playing) setStatus(`streaming ${mode}`); });
             el.addEventListener('timeupdate', updateProgressUI);
             el.addEventListener('durationchange', updateProgressUI);
-            el.addEventListener('error', () => { if (el.src) setStatus('stream error — tap play to retry'); });
+            el.addEventListener('error', () => { if (el.src) { console.error(`${el === stageVideo ? 'Video' : 'Audio'} element error:`, el.error); setStatus('stream error — tap play to retry'); } });
         });
 
         // Scrubber: click + drag (pointer capture keeps working outside the bar)

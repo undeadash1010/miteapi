@@ -115,17 +115,40 @@ app.get('/health', (req, res) => res.json({
 app.use(['/api/v1', '/proxy'], async (req, res) => {
     try {
         const targetUrl = `${YATTEE_URL}${req.originalUrl}`;
+        // Video relay requests can be slow (much bigger payload than audio),
+        // but they should never hang forever — cap it so failures are visible.
+        const isVideoDetails = /\/videos\//.test(req.originalUrl) && /proxy_mode=relay/.test(req.originalUrl);
+        const timeoutMs = isVideoDetails ? 25000 : 15000;
 
-        let response = await fetch(targetUrl, {
-            method: req.method,
-            headers: { ...authHeaders(), 'Accept': 'application/json' }
-        });
+        async function fetchWithTimeout(url, opts) {
+            const controller = new AbortController();
+            const t = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                return await fetch(url, { ...opts, signal: controller.signal });
+            } finally {
+                clearTimeout(t);
+            }
+        }
+
+        let response;
+        try {
+            response = await fetchWithTimeout(targetUrl, {
+                method: req.method,
+                headers: { ...authHeaders(), 'Accept': 'application/json' }
+            });
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                console.error(`Upstream timed out after ${timeoutMs}ms: ${targetUrl}`);
+                return res.status(504).json({ error: `Upstream timed out after ${timeoutMs / 1000}s`, url: targetUrl });
+            }
+            throw e;
+        }
 
         if (response.status === 401) {
             console.log('Got 401 — attempting login...');
             sessionCookie = ''; authToken = '';
             if (await performLogin()) {
-                response = await fetch(targetUrl, {
+                response = await fetchWithTimeout(targetUrl, {
                     method: req.method,
                     headers: { ...authHeaders(), 'Accept': 'application/json' }
                 });
