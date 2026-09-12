@@ -1,7 +1,7 @@
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { Readable } = require('stream'); // Required for piping fetch streams
+const { Readable } = require('stream');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -102,13 +102,47 @@ app.get('/health', (req, res) => res.json({
     authenticated: !!(sessionCookie || authToken)
 }));
 
-app.use(['/api/v1', '/proxy'], async (req, res) => {
+// NEW: Dedicated stream proxy to securely route absolute media URLs
+app.use('/proxy/stream', async (req, res) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return res.status(400).send('Missing url parameter');
+
+    const customHeaders = { ...authHeaders(), 'Accept': '*/*' };
+    if (req.headers.range) customHeaders['Range'] = req.headers.range;
+
+    try {
+        const response = await fetch(targetUrl, {
+            headers: customHeaders,
+            redirect: 'follow'
+        });
+
+        res.status(response.status);
+        const headersToKeep = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control'];
+        response.headers.forEach((value, key) => {
+            if (headersToKeep.includes(key.toLowerCase())) {
+                res.setHeader(key, value);
+            }
+        });
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        if (response.body) {
+            return Readable.fromWeb(response.body).pipe(res);
+        } else {
+            return res.end();
+        }
+    } catch (e) {
+        console.error('Stream proxy error:', e.message);
+        if (!res.headersSent) res.status(502).end();
+    }
+});
+
+// UPDATED: Now catches relative media routes like /videoplayback alongside the API
+app.use(['/api/v1', '/videoplayback', '/latest_version'], async (req, res) => {
     try {
         const targetUrl = `${YATTEE_URL}${req.originalUrl}`;
         const isVideoDetails = /\/videos\//.test(req.originalUrl) && /proxy_mode=relay/.test(req.originalUrl);
         const timeoutMs = isVideoDetails ? 25000 : 15000;
 
-        // CRITICAL FIX: Pass the Range header to support HTTP 206 Partial Content video buffering
         const customHeaders = { ...authHeaders(), 'Accept': 'application/json, */*' };
         if (req.headers.range) customHeaders['Range'] = req.headers.range;
 
@@ -117,7 +151,7 @@ app.use(['/api/v1', '/proxy'], async (req, res) => {
             const t = setTimeout(() => controller.abort(), timeoutMs);
             try {
                 const fetched = await fetch(url, { ...opts, signal: controller.signal });
-                clearTimeout(t); // Clear timeout so binary streams can take as long as they need
+                clearTimeout(t);
                 return fetched;
             } catch (e) {
                 clearTimeout(t);
@@ -148,7 +182,6 @@ app.use(['/api/v1', '/proxy'], async (req, res) => {
             }
         }
 
-        // CRITICAL FIX: Set proper HTTP status and forward crucial media headers
         res.status(response.status);
         const headersToKeep = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control'];
         response.headers.forEach((value, key) => {
@@ -160,13 +193,11 @@ app.use(['/api/v1', '/proxy'], async (req, res) => {
 
         const contentType = response.headers.get('content-type') || '';
 
-        // Route JSON normally
         if (contentType.includes('application/json')) {
             const data = await response.json();
             return res.json(data);
         }
 
-        // CRITICAL FIX: Stream binary data natively instead of trying to parse it as UTF-8 text
         if (response.body) {
             return Readable.fromWeb(response.body).pipe(res);
         } else {
