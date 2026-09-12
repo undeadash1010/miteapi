@@ -535,8 +535,10 @@
             if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
 
             // Guard against a silent infinite hang — surface a real error instead.
+            // 'download' mode fetches the whole file server-side via yt-dlp first,
+            // so it legitimately needs more time than a live 'relay' stream.
             const controller = new AbortController();
-            const timeoutMs = 28000;
+            const timeoutMs = proxyMode === 'download' ? 50000 : 28000;
             const t = setTimeout(() => controller.abort(), timeoutMs);
 
             let res;
@@ -697,10 +699,16 @@
 
             $('dock').classList.remove('translate-y-full');
             updateMeta();
-            setStatus('resolving stream...');
+            setStatus(mode === 'video' ? 'downloading video (can take a bit)...' : 'resolving stream...');
 
             try {
-                const data = await fetchVideoDetails(t.id, 'relay');
+                // 'relay' live-streams bytes with Range support — fine for small
+                // audio files, but per the Yattee API docs it's more fragile on
+                // large video files. 'download' has Yattee fetch the whole thing
+                // via yt-dlp first, then serve it as a normal file — slower to
+                // start, but far less likely to stall mid-stream.
+                const proxyMode = mode === 'video' ? 'download' : 'relay';
+                const data = await fetchVideoDetails(t.id, proxyMode);
                 current._data = data;
 
                 const targetEl = mode === 'audio' ? audioEl : stageVideo;
@@ -710,8 +718,22 @@
                 otherEl.load();
 
                 const best = mode === 'audio' ? pickBestAudio(data.adaptiveFormats) : pickBestProgressive(data.formatStreams);
-                if (!best) {
-                    setStatus('no playable stream found');
+
+                // Always log this — it's the fastest way to see WHY a stream
+                // does or doesn't work, without needing devtools network tab.
+                console.log(`[mite] mode=${mode} id=${t.id}`, {
+                    formatStreamsCount: (data.formatStreams || []).length,
+                    formatStreams: data.formatStreams,
+                    adaptiveFormatsCount: (data.adaptiveFormats || []).length,
+                    hlsUrl: data.hlsUrl || data.hls_url || null,
+                    chosen: best
+                });
+
+                if (!best || !best.url) {
+                    console.warn('[mite] No usable stream URL found for this mode.', { best });
+                    setStatus(mode === 'video'
+                        ? 'no progressive video stream for this track (may be audio-only source)'
+                        : 'no playable stream found');
                     return;
                 }
 
@@ -727,6 +749,22 @@
                 targetEl.src = best.url;
                 targetEl.load();
                 targetEl.playbackRate = rate;
+
+                // One-shot diagnostics on this specific load — tells us if the
+                // browser actually received real media (duration, dimensions)
+                // or something empty/broken that plays without erroring.
+                const diag = () => {
+                    console.log(`[mite] ${mode} element state`, {
+                        readyState: targetEl.readyState,
+                        networkState: targetEl.networkState,
+                        duration: targetEl.duration,
+                        videoWidth: targetEl.videoWidth,
+                        videoHeight: targetEl.videoHeight,
+                        currentSrc: targetEl.currentSrc
+                    });
+                };
+                targetEl.addEventListener('loadedmetadata', diag, { once: true });
+                setTimeout(diag, 3000);
 
                 targetEl.play().then(() => {
                     playing = true;
