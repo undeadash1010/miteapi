@@ -330,8 +330,8 @@
 
         function buildDownloadOptions(data) {
             return {
-                audio: (data.adaptiveFormats || []).filter(f => f.type?.startsWith('audio/')).map(f => ({ url: f.url, quality: `${f.audioQuality || 'audio'} · ${f.container || ''} · ${Math.round((parseInt(f.bitrate) || 0) / 1000)}kbps` })),
-                video: (data.formatStreams || []).filter(f => f.type?.startsWith('video/')).map(f => ({ url: f.url, quality: `${f.resolution || f.quality} · ${f.container || ''}` }))
+                audio: (data.adaptiveFormats || []).filter(f => f.type?.startsWith('audio/')).map(f => ({ url: f.url.startsWith('http') ? `/proxy/stream?url=${encodeURIComponent(f.url)}` : f.url, quality: `${f.audioQuality || 'audio'} · ${f.container || ''} · ${Math.round((parseInt(f.bitrate) || 0) / 1000)}kbps` })),
+                video: (data.formatStreams || []).filter(f => f.type?.startsWith('video/')).map(f => ({ url: f.url.startsWith('http') ? `/proxy/stream?url=${encodeURIComponent(f.url)}` : f.url, quality: `${f.resolution || f.quality} · ${f.container || ''}` }))
             };
         }
 
@@ -419,10 +419,18 @@
                 const best = mode === 'audio' ? pickBestAudio(data.adaptiveFormats) : pickBestProgressive(data.formatStreams);
                 if (!best) { setStatus('no playable stream found'); return; }
 
+                let finalSrc = best.url;
+                if (finalSrc.startsWith('http')) {
+                    finalSrc = `/proxy/stream?url=${encodeURIComponent(finalSrc)}`;
+                }
+
                 const pos = positions[t.id];
                 if (pos && pos.t > 30 && pos.d - pos.t > 30) { targetEl.addEventListener('loadedmetadata', () => { targetEl.currentTime = pos.t; setStatus(`resumed at ${fmt(pos.t)}`); }, { once: true }); }
 
-                targetEl.src = best.url; targetEl.load(); targetEl.playbackRate = rate;
+                targetEl.src = finalSrc; 
+                targetEl.load(); 
+                targetEl.playbackRate = rate;
+                
                 targetEl.play().then(() => { playing = true; updatePlayBtn(); setStatus(`streaming ${mode}`); }).catch(err => { setStatus('tap play to start'); });
                 updatePlayBtn(); updateMediaSession();
             } catch (err) { setStatus(err.message || 'playback error'); }
