@@ -8,7 +8,8 @@ function apiUrl(path) {
 
 async function parseError(response, fallback) {
   const body = await response.json().catch(() => ({}));
-  return new Error(body.detail || body.error || fallback);
+  const message = body.details || body.detail || body.error || fallback;
+  return new Error(message);
 }
 
 export async function searchVideos(query, { signal } = {}) {

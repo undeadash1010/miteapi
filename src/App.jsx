@@ -96,6 +96,7 @@ export default function App() {
             results={search.results}
             resultLabel={search.resultLabel}
             status={search.status}
+            error={search.error}
             isFavorite={library.isFavorite}
             onToggleFavorite={library.toggleFavorite}
             onPlay={playTrack}

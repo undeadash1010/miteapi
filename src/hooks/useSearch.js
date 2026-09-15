@@ -5,6 +5,7 @@ export function useSearch() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [status, setStatus] = useState('ready');
+  const [error, setError] = useState('');
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -12,6 +13,7 @@ export function useSearch() {
     if (!trimmedQuery) {
       abortRef.current?.abort();
       setResults([]);
+      setError('');
       setStatus('ready');
       return undefined;
     }
@@ -19,6 +21,7 @@ export function useSearch() {
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
+    setError('');
     setStatus('searching');
 
     const timeout = window.setTimeout(async () => {
@@ -26,11 +29,13 @@ export function useSearch() {
         const nextResults = await searchVideos(trimmedQuery, { signal: controller.signal });
         if (!controller.signal.aborted) {
           setResults(nextResults);
+          setError('');
           setStatus('success');
         }
       } catch (error) {
         if (error.name !== 'AbortError' && !controller.signal.aborted) {
           setResults([]);
+          setError(error.message || 'The API could not be reached.');
           setStatus('error');
         }
       }
@@ -47,6 +52,7 @@ export function useSearch() {
     setQuery,
     results,
     status,
+    error,
     resultLabel:
       status === 'ready'
         ? 'ready'

@@ -1,7 +1,7 @@
 import { SearchIcon, SpinnerIcon } from './Icons';
 import TrackCard from './TrackCard';
 
-export default function SearchView({ query, onQueryChange, results, resultLabel, status, isFavorite, onToggleFavorite, onPlay }) {
+export default function SearchView({ query, onQueryChange, results, resultLabel, status, error, isFavorite, onToggleFavorite, onPlay }) {
   return (
     <section className="view flex flex-col gap-4 pt-3">
       <div className="sticky top-14 z-30 py-2 bg-[#131316]/95 backdrop-blur-md flex flex-col gap-3">
@@ -27,7 +27,7 @@ export default function SearchView({ query, onQueryChange, results, resultLabel,
 
       <div className="flex flex-col gap-3">
         {status === 'error' ? (
-          <div className="text-center py-16 text-xs text-[#ffb4ab]">Could not reach the API. Please try again.</div>
+          <div className="text-center py-16 text-xs text-[#ffb4ab]"><p>{error || 'Could not reach the API.'}</p><p className="mt-2 text-[#9b8f7e]">Check the Yattee server connection and try again.</p></div>
         ) : status === 'searching' && !results.length ? (
           <div className="text-center py-16 text-xs text-[#9b8f7e] italic">Searching tracks...</div>
         ) : !query.trim() ? (

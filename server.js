@@ -6,9 +6,35 @@ const { Readable } = require('stream');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const YATTEE_URL = process.env.YATTEE_URL || 'https://yattee-server-production-1d73.up.railway.app';
+const YATTEE_URL = (process.env.YATTEE_URL || 'https://yattee-server-production-1d73.up.railway.app').replace(/\/+$/, '');
 
 app.use(cors());
+
+function upstreamMessage(error) {
+    const code = error?.cause?.code;
+    return code ? `${error.message} (${code})` : error.message;
+}
+
+function upstreamFailure(res, error, context = 'Upstream request failed') {
+    const timedOut = error?.name === 'AbortError';
+    const details = `${context}: ${upstreamMessage(error)}`;
+    console.error(details);
+    return res.status(timedOut ? 504 : 502).json({
+        error: timedOut ? 'Upstream timed out' : 'Upstream unavailable',
+        details,
+        upstream: YATTEE_URL
+    });
+}
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 15000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...opts, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 let sessionCookie = '';
 let authToken = '';
@@ -87,20 +113,23 @@ async function performLogin() {
 
 app.get('/debug', async (req, res) => {
     try {
-        const test = await fetch(`${YATTEE_URL}/api/v1/search?q=test&type=video`, { headers: authHeaders() });
-        res.json({
+        const test = await fetchWithTimeout(`${YATTEE_URL}/api/v1/search?q=test&type=video`, { headers: authHeaders() });
+        res.status(test.ok ? 200 : 502).json({
             envUserSet: !!process.env.YATTEE_USER,
             hasSession: !!(sessionCookie || authToken),
+            upstream: YATTEE_URL,
+            upstreamStatus: test.status,
             working: test.ok
         });
-    } catch (e) {
-        res.json({ error: e.message });
+    } catch (error) {
+        upstreamFailure(res, error, `Could not reach ${YATTEE_URL}`);
     }
 });
 
 app.get('/health', (req, res) => res.json({
     status: 'Mite Proxy Online',
-    authenticated: !!(sessionCookie || authToken)
+    authenticated: !!(sessionCookie || authToken),
+    upstream: YATTEE_URL
 }));
 
 // NEW: Dedicated stream proxy to securely route absolute media URLs
@@ -131,9 +160,8 @@ app.use('/proxy/stream', async (req, res) => {
         } else {
             return res.end();
         }
-    } catch (e) {
-        console.error('Stream proxy error:', e.message);
-        if (!res.headersSent) res.status(502).end();
+    } catch (error) {
+        if (!res.headersSent) upstreamFailure(res, error, 'Media stream request failed');
     }
 });
 
@@ -147,30 +175,14 @@ app.use(['/api/v1', '/videoplayback', '/latest_version'], async (req, res) => {
         const customHeaders = { ...authHeaders(), 'Accept': 'application/json, */*' };
         if (req.headers.range) customHeaders['Range'] = req.headers.range;
 
-        async function fetchWithTimeout(url, opts) {
-            const controller = new AbortController();
-            const t = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-                const fetched = await fetch(url, { ...opts, signal: controller.signal });
-                clearTimeout(t);
-                return fetched;
-            } catch (e) {
-                clearTimeout(t);
-                throw e;
-            }
-        }
-
         let response;
         try {
             response = await fetchWithTimeout(targetUrl, {
                 method: req.method,
                 headers: customHeaders
-            });
-        } catch (e) {
-            if (e.name === 'AbortError') {
-                return res.status(504).json({ error: `Upstream timed out`, url: targetUrl });
-            }
-            throw e;
+            }, timeoutMs);
+        } catch (error) {
+            return upstreamFailure(res, error, `Could not reach ${YATTEE_URL}`);
         }
 
         if (response.status === 401) {
@@ -178,8 +190,8 @@ app.use(['/api/v1', '/videoplayback', '/latest_version'], async (req, res) => {
             if (await performLogin()) {
                 response = await fetchWithTimeout(targetUrl, {
                     method: req.method,
-                    headers: customHeaders
-                });
+                    headers: { ...authHeaders(), 'Accept': 'application/json, */*' }
+                }, timeoutMs);
             }
         }
 
@@ -206,10 +218,11 @@ app.use(['/api/v1', '/videoplayback', '/latest_version'], async (req, res) => {
         }
 
     } catch (error) {
+        if (res.headersSent) return;
+        const isUpstreamError = error?.name === 'AbortError' || error?.cause?.code || error?.message === 'fetch failed';
+        if (isUpstreamError) return upstreamFailure(res, error, `Could not reach ${YATTEE_URL}`);
         console.error('Proxy error:', error.message);
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Proxy internal error', details: error.message });
-        }
+        res.status(500).json({ error: 'Proxy internal error', details: error.message });
     }
 });
 
