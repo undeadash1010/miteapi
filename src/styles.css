@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: #131316;
+  color: #e4e1e6;
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: contain;
+}
+
+button,
+.card {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(242, 195, 107, 0.75);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(242, 195, 107, 0.15);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(242, 195, 107, 0.3);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.card {
+  background: #1f1f22;
+  border: 1px solid #2a2a2d;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.card:hover {
+  background: #2a2a2d;
+  border-color: rgba(242, 195, 107, 0.25);
+}
+
+.stage-modal {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: visibility 0s 0.3s, opacity 0.3s;
+}
+
+.stage-modal.open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.stage-card {
+  transition: transform 0.35s cubic-bezier(.32, .72, 0, 1);
+}
+
+@media (max-width: 639px) {
+  .stage-card {
+    transform: translateY(100%);
+  }
+
+  .stage-modal.open .stage-card {
+    transform: translateY(0);
+  }
+}
+
+@media (min-width: 640px) {
+  .stage-card {
+    transform: scale(0.96);
+    opacity: 0;
+    transition: transform 0.35s cubic-bezier(.32, .72, 0, 1), opacity 0.25s;
+  }
+
+  .stage-modal.open .stage-card {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.scrub {
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.anim-row {
+  animation: fadeUp 0.25s ease both;
+}
+
+.amber-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f2c36b;
+  display: inline-block;
+  box-shadow: 0 0 8px rgba(242, 195, 107, 0.8), 0 0 16px rgba(242, 195, 107, 0.4);
+}
+
+.amber-dot-small {
+  width: 4px;
+  height: 4px;
+}
+
+.section-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-weight: 500;
+  color: #e4e1e6;
+  letter-spacing: -0.01em;
+}

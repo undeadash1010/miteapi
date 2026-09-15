@@ -1,16 +1,31 @@
 {
   "name": "mite",
   "version": "1.0.0",
-  "description": "Mite — quiet media utility. Single Node/Express app serving frontend + Yattee proxy.",
+  "description": "Mite — quiet media utility. React/Vite frontend + Yattee proxy.",
   "main": "server.js",
   "engines": {
     "node": ">=18.14"
   },
-  "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
-  },
   "scripts": {
+    "dev": "concurrently --names api,web --prefix-colors blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "node server.js",
+    "build": "vite build",
+    "preview": "vite preview",
     "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^5.4.10"
   }
 }
