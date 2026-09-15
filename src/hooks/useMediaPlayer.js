@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchVideoDetails } from '../services/api';
 import {
   buildDownloadOptions,
+  formatDuration,
   pickBestAudio,
   pickBestProgressive,
   toProxyUrl
@@ -23,7 +24,6 @@ export function useMediaPlayer({ addRecent, getPosition, savePosition, clearPosi
   const detailsCacheRef = useRef(new Map());
 
   const [current, setCurrent] = useState(null);
-  const [currentData, setCurrentData] = useState(null);
   const [mode, setModeState] = useState('video');
   const [playing, setPlayingState] = useState(false);
   const [status, setStatus] = useState('idle');
@@ -155,7 +155,6 @@ export function useMediaPlayer({ addRecent, getPosition, savePosition, clearPosi
         const data = await resolveDetails(track.id, 'relay', controller.signal);
         if (requestId !== requestRef.current) return;
 
-        setCurrentData(data);
         const target = activeElement();
         const other = modeRef.current === 'audio' ? videoRef.current : audioRef.current;
         if (!target) throw new Error('Player is not ready');
@@ -187,7 +186,7 @@ export function useMediaPlayer({ addRecent, getPosition, savePosition, clearPosi
             if (requestId !== requestRef.current) return;
             try {
               target.currentTime = restoreTime;
-              setStatus(`resumed at ${formatTime(restoreTime)}`);
+              setStatus(`resumed at ${formatDuration(restoreTime)}`);
             } catch {
               // The media element may not accept a seek until metadata is ready.
             }
@@ -352,7 +351,6 @@ export function useMediaPlayer({ addRecent, getPosition, savePosition, clearPosi
     audioRef,
     videoRef,
     current,
-    currentData,
     mode,
     playing,
     status,
@@ -370,10 +368,3 @@ export function useMediaPlayer({ addRecent, getPosition, savePosition, clearPosi
   };
 }
 
-function formatTime(seconds) {
-  if (!seconds || Number.isNaN(Number(seconds))) return '0:00';
-  const total = Math.floor(Number(seconds));
-  const minutes = Math.floor(total / 60);
-  const remainder = total % 60;
-  return `${minutes}:${remainder < 10 ? '0' : ''}${remainder}`;
-}

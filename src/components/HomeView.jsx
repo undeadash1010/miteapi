@@ -11,7 +11,7 @@ const categories = [
   ['smooth jazz relax', 'Jazz']
 ];
 
-export default function HomeView({ recent, favorites, onPlay, isFavorite, onToggleFavorite, onClearRecent, onSearch }) {
+export default function HomeView({ recent, favorites, onPlay, onClearRecent, onSearch }) {
   const [query, setQuery] = useState('');
 
   const submitSearch = (value = query) => {

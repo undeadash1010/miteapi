@@ -21,6 +21,7 @@ export default function App() {
     savePosition: library.savePosition,
     clearPosition: library.clearPosition
   });
+  const { togglePlay, seekBy } = player;
 
   const navigate = (nextView) => {
     setView(nextView);
@@ -51,11 +52,11 @@ export default function App() {
 
       if (event.code === 'Space') {
         event.preventDefault();
-        player.togglePlay();
+        togglePlay();
       } else if (event.key === 'ArrowLeft') {
-        player.seekBy(-10);
+        seekBy(-10);
       } else if (event.key === 'ArrowRight') {
-        player.seekBy(10);
+        seekBy(10);
       } else if (event.key === '/') {
         event.preventDefault();
         setView('search');
@@ -66,7 +67,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [player.seekBy, player.togglePlay]);
+  }, [seekBy, togglePlay]);
 
   return (
     <div className="min-h-screen flex flex-col selection:bg-[#f2c36b]/30">
@@ -84,8 +85,6 @@ export default function App() {
             recent={library.recent}
             favorites={library.favorites}
             onPlay={playTrack}
-            isFavorite={library.isFavorite}
-            onToggleFavorite={library.toggleFavorite}
             onClearRecent={library.clearRecent}
             onSearch={startSearch}
           />
@@ -120,7 +119,7 @@ export default function App() {
         progress={player.progress}
         favorite={player.current ? library.isFavorite(player.current.id) : false}
         onOpen={() => setModalOpen(true)}
-        onTogglePlay={player.togglePlay}
+        onTogglePlay={togglePlay}
         onToggleFavorite={toggleCurrentFavorite}
       />
 
@@ -137,11 +136,11 @@ export default function App() {
         downloadOptions={player.downloadOptions}
         downloadStatus={player.downloadStatus}
         onClose={() => setModalOpen(false)}
-        onTogglePlay={player.togglePlay}
+        onTogglePlay={togglePlay}
         onToggleFavorite={toggleCurrentFavorite}
         onModeChange={player.setMode}
         onSeek={player.seekTo}
-        onSeekBy={player.seekBy}
+        onSeekBy={seekBy}
         onCycleRate={player.cycleRate}
         onLoadDownloads={player.loadDownloadOptions}
       />
