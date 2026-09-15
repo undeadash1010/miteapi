@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const { Readable } = require('stream');
@@ -212,9 +213,16 @@ app.use(['/api/v1', '/videoplayback', '/latest_version'], async (req, res) => {
     }
 });
 
+// Serve the Vite build in production. Falling back to the source entry point keeps
+// `npm start` useful before the first build as well.
+const distDir = path.join(__dirname, 'dist');
+const frontendDir = fs.existsSync(path.join(distDir, 'index.html')) ? distDir : __dirname;
+const frontendEntry = path.join(frontendDir, 'index.html');
+
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(frontendDir));
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(frontendEntry);
 });
 
 app.listen(PORT, () => console.log(`Mite server running on port ${PORT}`));
